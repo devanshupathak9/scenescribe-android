@@ -15,17 +15,14 @@ data class GrammarDto(
     val example: String?
 )
 
+// Matches the `video` object returned by GET /dashboard/today
 data class VideoDto(
     @SerializedName("video_id") val videoId: String,
     @SerializedName("video_url") val videoUrl: String,
     val title: String?,
-    @SerializedName("scene_description") val sceneDescription: String?,
-    @SerializedName("reference_description") val referenceDescription: String?,
-    @SerializedName("additional_notes") val additionalNotes: String?,
     val description: String?,
+    @SerializedName("additional_notes") val additionalNotes: String?,
     val difficulty: String?,
-    val language: String?,
-    @SerializedName("submission_count") val submissionCount: Int = 0,
     val vocabularies: List<VocabularyDto> = emptyList(),
     val grammars: List<GrammarDto> = emptyList()
 )
@@ -53,15 +50,21 @@ data class SubmissionDto(
     @SerializedName("new_streak") val newStreak: Int?
 )
 
-data class TodayData(
+// One entry in the `scenes` array from GET /dashboard/today
+data class SceneItem(
     val status: String,
     val video: VideoDto,
     val submission: SubmissionDto?
 )
 
+// GET /dashboard/today → { success, data: { scenes: [...] } }
+data class TodayResponseData(
+    val scenes: List<SceneItem>
+)
+
 data class TodayResponse(
     val success: Boolean,
-    val data: TodayData?
+    val data: TodayResponseData?
 )
 
 data class SubmitRequest(

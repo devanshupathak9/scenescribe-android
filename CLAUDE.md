@@ -60,6 +60,8 @@ navigation/NavGraph.kt — NavHost with bottom bar (Home, Profile); routes: auth
 
 **`scorePraise()`** is a plain (non-composable) function in `SharedComponents.kt` — call it inside `Text(...)`.
 
+**Multiple scenes per day:** `GET /dashboard/today` returns `{ data: { scenes: [...] } }` — an array, not a single scene. `HomeViewModel` holds a `List<SceneItem>` and a `Map<videoId, SceneInputState>` so each scene in the carousel tracks its own text/recording/submitting state independently. `HomeScreen` uses `HorizontalPager` with dot indicators and arrow buttons for navigation. Swiping stops any active speech recognizer via `LaunchedEffect(pagerState.currentPage)`.
+
 ## Color reference
 
 ```kotlin
