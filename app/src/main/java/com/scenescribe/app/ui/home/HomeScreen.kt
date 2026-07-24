@@ -35,6 +35,7 @@ import com.scenescribe.app.data.api.models.SubmissionDto
 import com.scenescribe.app.data.api.models.VideoDto
 import com.scenescribe.app.ui.components.*
 import com.scenescribe.app.ui.theme.*
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,16 +47,6 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
-    val context = LocalContext.current
-
-    // Active recognizer — stored here so we can stop it on page change
-    val activeRecognizer = remember { mutableStateOf<SpeechRecognizer?>(null) }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        // permission result handled per-scene via onMicClick callback
-    }
 
     Box(
         modifier = Modifier
@@ -64,201 +55,216 @@ fun HomeScreen(
     ) {
         when (val screen = state.screenState) {
             is HomeState.Loading -> LoadingScreen()
+            is HomeState.Error   -> NoSceneState(onRetry = viewModel::loadToday)
+            is HomeState.Success -> SceneCarousel(
+                scenes      = screen.scenes,
+                sceneInputs = state.sceneInputs,
+                viewModel   = viewModel
+            )
+        }
+    }
+}
 
-            is HomeState.Error -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.padding(24.dp)
-                    ) {
-                        Text("🎬", fontSize = 40.sp)
-                        Text(
-                            "No scene scheduled for today.",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
-                        )
-                        Text(
-                            "Check back tomorrow — new content drops daily.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
-                        )
-                        TextButton(onClick = { viewModel.loadToday() }) {
-                            Text("Retry", color = Accent)
-                        }
-                    }
-                }
-            }
+// ── Error / empty state ───────────────────────────────────────────────────────
 
-            is HomeState.Success -> {
-                val scenes = screen.scenes
-                val pagerState = rememberPagerState(pageCount = { scenes.size })
-                val scope = rememberCoroutineScope()
-
-                // Stop speech recognition when the user swipes to a different scene
-                LaunchedEffect(pagerState.currentPage) {
-                    activeRecognizer.value?.stopListening()
-                    activeRecognizer.value = null
-                    viewModel.stopAllRecording()
-                }
-
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
-                    // ── Header ─────────────────────────────────────────────
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val today = SimpleDateFormat("MMMM d, yyyy", Locale.US).format(Date())
-                        Text(
-                            text = "Today — $today",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (scenes.size > 1) {
-                            Text(
-                                text = "${scenes.count { it.status == "submitted" }}/${scenes.size} done",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(CardBackground)
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-
-                    // ── Carousel nav (dots + arrows) — only shown for multiple scenes ──
-                    if (scenes.size > 1) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Left arrow
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                                    }
-                                },
-                                enabled = pagerState.currentPage > 0,
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Text(
-                                    "‹",
-                                    fontSize = 24.sp,
-                                    color = if (pagerState.currentPage > 0) TextPrimary else TextSecondary
-                                )
-                            }
-
-                            Spacer(Modifier.width(8.dp))
-
-                            // Dot indicators
-                            scenes.forEachIndexed { idx, scene ->
-                                val isActive = idx == pagerState.currentPage
-                                val isDone = scene.status == "submitted"
-                                Box(
-                                    modifier = Modifier
-                                        .padding(horizontal = 4.dp)
-                                        .size(if (isActive) 10.dp else 7.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            when {
-                                                isActive -> Accent
-                                                isDone   -> Success
-                                                else     -> CardBorder
-                                            }
-                                        )
-                                )
-                            }
-
-                            Spacer(Modifier.width(8.dp))
-
-                            // Right arrow
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                                    }
-                                },
-                                enabled = pagerState.currentPage < scenes.size - 1,
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Text(
-                                    "›",
-                                    fontSize = 24.sp,
-                                    color = if (pagerState.currentPage < scenes.size - 1) TextPrimary else TextSecondary
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-                    }
-
-                    // ── Pager ──────────────────────────────────────────────
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.weight(1f)
-                    ) { page ->
-                        val scene = scenes[page]
-                        val input = state.sceneInputs[scene.video.videoId] ?: SceneInputState()
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            // Per-scene difficulty badge
-                            DifficultyBadge(difficulty = scene.video.difficulty)
-
-                            if (scene.status == "pending") {
-                                PendingContent(
-                                    video  = scene.video,
-                                    input  = input,
-                                    onTextChange = { viewModel.updateDescription(scene.video.videoId, it) },
-                                    onMicClick = {
-                                        if (input.isRecording) {
-                                            activeRecognizer.value?.stopListening()
-                                            activeRecognizer.value = null
-                                            viewModel.setRecording(scene.video.videoId, false)
-                                        } else {
-                                            val hasPermission = ContextCompat.checkSelfPermission(
-                                                context, Manifest.permission.RECORD_AUDIO
-                                            ) == PackageManager.PERMISSION_GRANTED
-                                            if (hasPermission) {
-                                                val rec = startSpeechRecognition(
-                                                    context, scene.video.videoId, input.text, viewModel
-                                                )
-                                                activeRecognizer.value = rec
-                                            } else {
-                                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                            }
-                                        }
-                                    },
-                                    onSubmit = { viewModel.submit(scene.video.videoId) }
-                                )
-                            } else {
-                                SubmittedContent(video = scene.video, submission = scene.submission)
-                            }
-
-                            Spacer(Modifier.height(80.dp))
-                        }
-                    }
-                }
+@Composable
+private fun NoSceneState(onRetry: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(24.dp)
+        ) {
+            Text("🎬", fontSize = 40.sp)
+            Text(
+                "No scene scheduled for today.",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+            Text(
+                "Check back tomorrow — new content drops daily.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary
+            )
+            TextButton(onClick = onRetry) {
+                Text("Retry", color = Accent)
             }
         }
     }
 }
+
+// ── Carousel — extracted so rememberPagerState is called unconditionally ──────
+// (Compose Rules of Composables: never call remember-based APIs inside
+//  a conditional branch of the parent composable.)
+
+@Composable
+private fun SceneCarousel(
+    scenes: List<SceneItem>,
+    sceneInputs: Map<String, SceneInputState>,
+    viewModel: HomeViewModel
+) {
+    val context = LocalContext.current
+    val pagerState = rememberPagerState(pageCount = { scenes.size })
+    val scope = rememberCoroutineScope()
+
+    // Holds the active SpeechRecognizer so we can stop it on page swipe
+    val activeRecognizer = remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> /* user must tap mic again after granting */ }
+
+    // Stop speech only on actual page changes — drop(1) skips the initial emission
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+            .drop(1)
+            .collect {
+                activeRecognizer.value?.stopListening()
+                activeRecognizer.value = null
+                viewModel.stopAllRecording()
+            }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        // ── Header ────────────────────────────────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val today = SimpleDateFormat("MMMM d, yyyy", Locale.US).format(Date())
+            Text(
+                text = "Today — $today",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextSecondary,
+                modifier = Modifier.weight(1f)
+            )
+            if (scenes.size > 1) {
+                Text(
+                    text = "${scenes.count { it.status == "submitted" }}/${scenes.size} done",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(CardBackground)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+        }
+
+        // ── Dot nav — only when there are multiple scenes ─────────────
+        if (scenes.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) } },
+                    enabled = pagerState.currentPage > 0,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Text(
+                        "‹", fontSize = 24.sp,
+                        color = if (pagerState.currentPage > 0) TextPrimary else TextSecondary
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                scenes.forEachIndexed { idx, scene ->
+                    val isActive = idx == pagerState.currentPage
+                    val isDone   = scene.status == "submitted"
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .size(if (isActive) 10.dp else 7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isActive -> Accent
+                                    isDone   -> Success
+                                    else     -> CardBorder
+                                }
+                            )
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } },
+                    enabled = pagerState.currentPage < scenes.size - 1,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Text(
+                        "›", fontSize = 24.sp,
+                        color = if (pagerState.currentPage < scenes.size - 1) TextPrimary else TextSecondary
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+        }
+
+        // ── Pager — key stabilises content across recompositions ──────
+        HorizontalPager(
+            state    = pagerState,
+            key      = { scenes[it].video.videoId },
+            modifier = Modifier.weight(1f)
+        ) { page ->
+            val scene = scenes[page]
+            val input = sceneInputs[scene.video.videoId] ?: SceneInputState()
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                DifficultyBadge(difficulty = scene.video.difficulty)
+
+                if (scene.status == "pending") {
+                    PendingContent(
+                        video        = scene.video,
+                        input        = input,
+                        onTextChange = { viewModel.updateDescription(scene.video.videoId, it) },
+                        onMicClick   = {
+                            if (input.isRecording) {
+                                activeRecognizer.value?.stopListening()
+                                activeRecognizer.value = null
+                                viewModel.setRecording(scene.video.videoId, false)
+                            } else {
+                                val hasPermission = ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (hasPermission) {
+                                    activeRecognizer.value = startSpeechRecognition(
+                                        context, scene.video.videoId, input.text, viewModel
+                                    )
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        },
+                        onSubmit = { viewModel.submit(scene.video.videoId) }
+                    )
+                } else {
+                    SubmittedContent(video = scene.video, submission = scene.submission)
+                }
+
+                Spacer(Modifier.height(80.dp))
+            }
+        }
+    }
+}
+
+// ── Pending scene ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun PendingContent(
@@ -271,11 +277,7 @@ private fun PendingContent(
     YouTubePlayer(videoUrl = video.videoUrl)
 
     if (!video.title.isNullOrBlank()) {
-        Text(
-            text = video.title,
-            style = MaterialTheme.typography.titleMedium,
-            color = TextPrimary
-        )
+        Text(text = video.title, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
     }
 
     if (!video.description.isNullOrBlank()) {
@@ -291,42 +293,35 @@ private fun PendingContent(
         Spacer(Modifier.height(10.dp))
 
         OutlinedTextField(
-            value = input.text,
+            value       = input.text,
             onValueChange = onTextChange,
             placeholder = { Text("Describe what's happening in the video…", color = TextSecondary) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp),
-            shape = RoundedCornerShape(10.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                unfocusedBorderColor = CardBorder,
-                focusedTextColor = TextPrimary,
-                unfocusedTextColor = TextPrimary,
+            modifier    = Modifier.fillMaxWidth().height(120.dp),
+            shape       = RoundedCornerShape(10.dp),
+            colors      = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor    = Accent,
+                unfocusedBorderColor  = CardBorder,
+                focusedTextColor      = TextPrimary,
+                unfocusedTextColor    = TextPrimary,
                 focusedContainerColor = InputBackground,
                 unfocusedContainerColor = InputBackground,
-                cursorColor = Accent
+                cursorColor           = Accent
             )
         )
 
         Spacer(Modifier.height(10.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier              = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment     = Alignment.CenterVertically
         ) {
             if (input.isRecording) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Danger)
-                    )
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Danger))
                     Text("Listening…", color = Danger, fontSize = 13.sp)
                 }
             } else {
@@ -334,7 +329,7 @@ private fun PendingContent(
             }
 
             IconButton(
-                onClick = onMicClick,
+                onClick  = onMicClick,
                 modifier = Modifier
                     .size(44.dp)
                     .clip(CircleShape)
@@ -353,12 +348,14 @@ private fun PendingContent(
         Spacer(Modifier.height(12.dp))
 
         ScButton(
-            text = if (input.isSubmitting) "Analysing with AI…" else "Submit description",
+            text    = if (input.isSubmitting) "Analysing with AI…" else "Submit description",
             onClick = onSubmit,
             enabled = !input.isSubmitting && input.text.trim().length >= 10
         )
     }
 }
+
+// ── Submitted scene ───────────────────────────────────────────────────────────
 
 @Composable
 private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
@@ -369,9 +366,9 @@ private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
     ScCard {
         submission.inputType?.let { inputType ->
             Text(
-                text = if (inputType == "microphone") "via microphone" else "via keyboard",
+                text     = if (inputType == "microphone") "via microphone" else "via keyboard",
                 fontSize = 11.sp,
-                color = if (inputType == "microphone") Purple else TextSecondary,
+                color    = if (inputType == "microphone") Purple else TextSecondary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
                     .background(if (inputType == "microphone") Purple.copy(0.1f) else CardBorder)
@@ -382,9 +379,9 @@ private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
 
         if (!submission.responseText.isNullOrBlank()) {
             Text(
-                text = submission.responseText,
-                style = MaterialTheme.typography.bodyLarge,
-                color = TextPrimary,
+                text     = submission.responseText,
+                style    = MaterialTheme.typography.bodyLarge,
+                color    = TextPrimary,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
@@ -396,7 +393,7 @@ private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
 
         val score = submission.score ?: 0
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             ScoreRing(score = score)
@@ -404,23 +401,23 @@ private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
                 Text("Overall score", style = MaterialTheme.typography.labelSmall)
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        text = score.toString(),
-                        fontSize = 32.sp,
+                        text       = score.toString(),
+                        fontSize   = 32.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color      = TextPrimary
                     )
                     Text(
-                        text = " / 10",
+                        text     = " / 10",
                         fontSize = 16.sp,
-                        color = TextSecondary,
+                        color    = TextSecondary,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
                 Text(
-                    text = scorePraise(score),
-                    color = scoreColor(score),
+                    text       = scorePraise(score),
+                    color      = scoreColor(score),
                     fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp
+                    fontSize   = 13.sp
                 )
             }
         }
@@ -465,28 +462,30 @@ private fun SubmittedContent(video: VideoDto, submission: SubmissionDto?) {
     }
 }
 
+// ── Shared feedback row ───────────────────────────────────────────────────────
+
 @Composable
 fun FeedbackItem(text: String, isIssue: Boolean) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
+        modifier              = Modifier.fillMaxWidth().padding(vertical = 3.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = if (isIssue) "✕" else "→",
-            color = if (isIssue) Danger else Success,
+            text     = if (isIssue) "✕" else "→",
+            color    = if (isIssue) Danger else Success,
             fontSize = 12.sp,
             modifier = Modifier.padding(top = 2.dp)
         )
         Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextPrimary,
+            text     = text,
+            style    = MaterialTheme.typography.bodyMedium,
+            color    = TextPrimary,
             modifier = Modifier.weight(1f)
         )
     }
 }
+
+// ── Speech recognition helper ─────────────────────────────────────────────────
 
 private fun startSpeechRecognition(
     context: android.content.Context,
@@ -506,9 +505,7 @@ private fun startSpeechRecognition(
     var baseText = currentText
 
     recognizer.setRecognitionListener(object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            viewModel.setRecording(videoId, true)
-        }
+        override fun onReadyForSpeech(params: Bundle?) { viewModel.setRecording(videoId, true) }
         override fun onPartialResults(partialResults: Bundle?) {
             val partial = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
